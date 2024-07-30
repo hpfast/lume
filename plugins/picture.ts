@@ -1,9 +1,9 @@
-import { posix } from "../deps/path.ts";
-import { getPathAndExtension } from "../core/utils/path.ts";
-import { merge } from "../core/utils/object.ts";
-import { contentType } from "../deps/media_types.ts";
+import { posix } from "lume/deps/path.ts";
+import { getPathAndExtension } from "lume/core/utils/path.ts";
+import { merge } from "lume/core/utils/object.ts";
+import { contentType } from "lume/deps/media_types.ts";
 
-import type Site from "../core/site.ts";
+import type Site from "lume/core/site.ts";
 
 interface SourceFormat {
   width?: number;
@@ -60,18 +60,11 @@ export default function (userOptions?: Options) {
             throw new Error("img element must have a src attribute");
           }
 
-          const picture = img.closest("picture");
-
-          if (picture) {
-            handlePicture(transformImages, img, picture, basePath);
-            continue;
-          }
 
           handleImg(transformImages, img, basePath);
         }
       }
 
-      // Remove the image-transform attribute from the HTML
       for (const page of pages) {
         page.document?.querySelectorAll("[transform-images]").forEach(
           (element) => {
@@ -80,6 +73,7 @@ export default function (userOptions?: Options) {
         );
       }
     });
+
 
     site.process("*", (pages) => {
       for (const page of pages) {
@@ -97,8 +91,20 @@ export default function (userOptions?: Options) {
               : [page.data[name]]
             : [];
 
+          //add an explicit width to 'cover' images (so they stay high enough on narrow screens)
+          //'content' images should scale, so height is allowed to scale in proportion to width (default)
           for (const [suffix, scale] of Object.entries(scales)) {
-            if (width) {
+            if (width && path.match(/-cover/)) {
+              if (parseInt(width) <= 600) {
+                let widthheight = [width, 700];
+                transformImages.push({
+                  resize: widthheight,
+                  suffix,
+                  format,
+                });
+                continue;
+              }
+            } else {
               transformImages.push({
                 resize: width * scale,
                 suffix,
@@ -116,6 +122,7 @@ export default function (userOptions?: Options) {
       }
     });
 
+    //unused in my case
     function handlePicture(
       transformImages: string,
       img: Element,
@@ -154,35 +161,14 @@ export default function (userOptions?: Options) {
       const sourceFormats = saveTransform(basePath, src, transformImages);
 
       sortSources(sourceFormats);
-
-      // Just only one format, no need to create a picture element
       if (sourceFormats.length === 1) {
         editImg(img, src, sourceFormats[0], sizes);
         return;
       }
 
-      const picture = img.ownerDocument!.createElement("picture");
+      // I modified editImg to take the whole sourceFormats array.
+      editImg(img, src, sourceFormats, sizes);
 
-      img.replaceWith(picture);
-
-      const last = sourceFormats[sourceFormats.length - 1];
-
-      for (const sourceFormat of sourceFormats) {
-        if (sourceFormat === last) {
-          editImg(img, src, last, sizes);
-          break;
-        }
-
-        const source = createSource(
-          img.ownerDocument!,
-          src,
-          sourceFormat,
-          sizes,
-        );
-        picture.append(source);
-      }
-
-      picture.append(img);
     }
 
     function sortSources(sources: SourceFormat[]) {
@@ -310,23 +296,26 @@ function parseSize(size: string): [number, number[]] {
   ];
 }
 
+//modifying to create a srcset string with _all_ the specified formats
 function createSrcset(
   src: string,
-  srcFormat: SourceFormat,
+  srcFormats: [SourceFormat],
   sizes?: string | null | undefined,
 ): string[] {
-  const { scales, format, width } = srcFormat;
-  const path = encodeURI(getPathAndExtension(src)[0]);
   const srcset: string[] = [];
+  const path = encodeURI(getPathAndExtension(src)[0]);
+  for (const fmt of srcFormats) {
+    const { scales, format, width } = fmt;
 
-  for (const [suffix, scale] of Object.entries(scales)) {
-    const scaleSuffix = sizes && width
-      ? ` ${scale * width}w`
-      : scale === 1
-      ? ""
-      : ` ${scale}x`;
-    srcset.push(`${path}${suffix}.${format}${scaleSuffix}`);
-  }
+    for (const [suffix, scale] of Object.entries(scales)) {
+      const scaleSuffix = sizes && width
+        ? ` ${scale * width}w`
+        : scale === 1
+        ? ""
+        : ` ${scale}x`;
+      srcset.push(`${path}${suffix}.${format}${scaleSuffix}`);
+    }
+  };
 
   return srcset;
 }
@@ -353,16 +342,14 @@ function createSource(
 function editImg(
   img: Element,
   src: string,
-  srcFormat: SourceFormat,
+  srcFormats: [SourceFormat],
   sizes?: string | null | undefined,
 ) {
-  const srcset = createSrcset(src, srcFormat, sizes);
-  const newSrc = srcset.shift()!;
+  const srcset = createSrcset(src, srcFormats, sizes);
 
   if (srcset.length) {
     img.setAttribute("srcset", srcset.join(", "));
   }
-  img.setAttribute("src", newSrc);
 
   if (sizes) {
     img.setAttribute("sizes", sizes);
